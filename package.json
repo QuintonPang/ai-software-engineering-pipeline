@@ -1,0 +1,14 @@
+{
+  "name": "ai-software-engineering-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "GitHub Issue -> Planner -> Independent Reviewer -> Final Plan -> Implementation -> Tests -> Security Review -> Pull Request",
+  "scripts": {
+    "test": "node --test",
+    "pipeline": "node src/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
