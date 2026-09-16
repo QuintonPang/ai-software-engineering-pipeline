@@ -4,7 +4,7 @@ import { loadConfig } from "./config.js";
 import { GithubClient } from "./github.js";
 import { OpenAIClient } from "./openai.js";
 import { repositorySnapshot } from "./repository.js";
-import { git, run } from "./lib/exec.js";
+import { git, run, sanitizedEnv } from "./lib/exec.js";
 import { extractJson } from "./lib/json.js";
 import { assertSafeRelativePath } from "./lib/paths.js";
 import {
@@ -22,6 +22,16 @@ function timestamp() {
 async function writeArtifact(dir, name, content) {
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, name), content, "utf8");
+}
+
+function assertSecurityApproved(raw, artifactPath) {
+  const security = extractJson(raw);
+  if (security.verdict === "BLOCK") {
+    throw new Error(`Security review blocked the PR. See ${artifactPath}`);
+  }
+  if (security.verdict !== "APPROVED") {
+    throw new Error(`Unexpected security verdict: ${security.verdict}`);
+  }
 }
 
 export async function runPipeline(issueNumber, cwd = process.cwd()) {
@@ -45,25 +55,25 @@ export async function runPipeline(issueNumber, cwd = process.cwd()) {
   const requirement = `GitHub issue #${issue.number}: ${issue.title}\n\n${issue.body}`;
   await writeArtifact(artifactDir, "00-requirement.md", requirement);
 
-  console.log("[1/7] Planner Agent");
+  console.log("[1/8] Planner Agent");
   const initialPlan = await ai.complete(plannerInstructions, `${requirement}\n\n--- REPOSITORY SNAPSHOT ---\n${snapshot}`);
   await writeArtifact(artifactDir, "01-initial-plan.md", initialPlan);
 
-  console.log("[2/7] Independent Reviewer Agent (fresh model request)");
+  console.log("[2/8] Independent Reviewer Agent (fresh model request)");
   const independentReview = await ai.complete(
     reviewerInstructions,
     `${requirement}\n\n--- REPOSITORY SNAPSHOT ---\n${snapshot}\n\n--- PLAN TO REVIEW ---\n${initialPlan}`
   );
   await writeArtifact(artifactDir, "02-independent-review.md", independentReview);
 
-  console.log("[3/7] Finalizer Agent");
+  console.log("[3/8] Finalizer Agent");
   const finalPlan = await ai.complete(
     finalizerInstructions,
     `${requirement}\n\n--- REPOSITORY SNAPSHOT ---\n${snapshot}\n\n--- INITIAL PLAN ---\n${initialPlan}\n\n--- INDEPENDENT REVIEW ---\n${independentReview}`
   );
   await writeArtifact(artifactDir, "03-final-plan.md", finalPlan);
 
-  console.log("[4/7] Implementation Agent");
+  console.log("[4/8] Implementation Agent");
   const implementationRaw = await ai.complete(
     implementerInstructions,
     `${requirement}\n\n--- REPOSITORY SNAPSHOT ---\n${snapshot}\n\n--- FINAL APPROVED PLAN ---\n${finalPlan}`
@@ -94,27 +104,36 @@ export async function runPipeline(issueNumber, cwd = process.cwd()) {
       await fs.writeFile(absolute, change.content, "utf8");
     }
 
-    console.log("[5/7] Tests");
-    const testResult = await run(config.testCommand, cwd);
-    await writeArtifact(artifactDir, "05-tests.txt", `${testResult.stdout}\n${testResult.stderr}`);
+    // Mark untracked files as intent-to-add so git diff includes their contents without staging them.
+    await git(["add", "-N", "."], cwd);
+    const preTestDiff = await git(["diff", "--no-ext-diff"], cwd);
+    if (!preTestDiff.trim()) throw new Error("Implementation produced no git diff");
 
-    console.log("[6/7] Security Reviewer Agent");
-    const diff = await git(["diff", "--no-ext-diff"], cwd);
-    if (!diff.trim()) throw new Error("Implementation produced no git diff");
+    console.log("[5/8] Pre-execution Security Reviewer Agent");
+    const preSecurityRaw = await ai.complete(
+      securityReviewerInstructions,
+      `${requirement}\n\n--- FINAL PLAN ---\n${finalPlan}\n\n--- PRE-EXECUTION GIT DIFF ---\n${preTestDiff}`
+    );
+    const preSecurityPath = path.join(artifactDir, "05-pre-execution-security-review.json");
+    await writeArtifact(artifactDir, "05-pre-execution-security-review.json", preSecurityRaw);
+    assertSecurityApproved(preSecurityRaw, preSecurityPath);
+
+    console.log("[6/8] Tests (sensitive environment variables removed)");
+    const testResult = await run(config.testCommand, cwd, { env: sanitizedEnv() });
+    await writeArtifact(artifactDir, "06-tests.txt", `${testResult.stdout}\n${testResult.stderr}`);
+
+    console.log("[7/8] Final Security Reviewer Agent");
+    const finalDiff = await git(["diff", "--no-ext-diff"], cwd);
+    if (!finalDiff.trim()) throw new Error("Implementation produced no git diff after tests");
     const securityRaw = await ai.complete(
       securityReviewerInstructions,
-      `${requirement}\n\n--- FINAL PLAN ---\n${finalPlan}\n\n--- GIT DIFF ---\n${diff}`
+      `${requirement}\n\n--- FINAL PLAN ---\n${finalPlan}\n\n--- FINAL GIT DIFF ---\n${finalDiff}`
     );
-    await writeArtifact(artifactDir, "06-security-review.json", securityRaw);
-    const security = extractJson(securityRaw);
-    if (security.verdict === "BLOCK") {
-      throw new Error(`Security review blocked the PR. See ${artifactDir}/06-security-review.json`);
-    }
-    if (security.verdict !== "APPROVED") {
-      throw new Error(`Unexpected security verdict: ${security.verdict}`);
-    }
+    const securityPath = path.join(artifactDir, "07-security-review.json");
+    await writeArtifact(artifactDir, "07-security-review.json", securityRaw);
+    assertSecurityApproved(securityRaw, securityPath);
 
-    console.log("[7/7] Commit, push, and PR");
+    console.log("[8/8] Commit, push, and PR");
     await git(["add", "-A"], cwd);
     const commitMessage = typeof implementation.commitMessage === "string" && implementation.commitMessage.trim()
       ? implementation.commitMessage.trim()
@@ -132,8 +151,9 @@ export async function runPipeline(issueNumber, cwd = process.cwd()) {
         "- Independent Reviewer Agent reviewed it in a fresh model request",
         "- Finalizer reconciled the plan",
         "- Implementation Agent produced bounded text-file changes",
-        `- Tests passed: \`${config.testCommand}\``,
-        "- Security Reviewer approved the diff"
+        "- Pre-execution Security Reviewer approved the generated diff",
+        `- Tests passed with secret-like environment variables removed: \`${config.testCommand}\``,
+        "- Final Security Reviewer approved the diff"
       ].join("\n"),
       head: branch,
       base: baseBranch
