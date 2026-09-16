@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.env
+.ai-pipeline/runs/
+coverage/
+*.log

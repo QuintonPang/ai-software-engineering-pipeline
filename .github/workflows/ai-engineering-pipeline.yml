@@ -1,0 +1,44 @@
+name: AI Engineering Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: GitHub issue number to implement
+        required: true
+        type: number
+      dry_run:
+        description: Plan/review only; do not write code or create a PR
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  issues: read
+  pull-requests: write
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm test
+
+      - name: Run AI engineering pipeline
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5.3-codex' }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PIPELINE_TEST_COMMAND: npm test
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: npm run pipeline -- --issue ${{ inputs.issue_number }}
