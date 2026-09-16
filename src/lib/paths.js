@@ -11,7 +11,8 @@ export function assertSafeRelativePath(filePath) {
   if (normalized === ".git" || normalized.startsWith(".git/")) {
     throw new Error(`Writing inside .git is not allowed: ${filePath}`);
   }
-  if (normalized === ".env" || normalized.endsWith("/.env")) {
+  const segments = normalized.split("/");
+  if (segments.some((segment) => segment === ".env" || segment.startsWith(".env."))) {
     throw new Error(`Writing .env files is blocked: ${filePath}`);
   }
   return normalized;
