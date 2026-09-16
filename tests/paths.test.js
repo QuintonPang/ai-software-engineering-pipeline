@@ -16,4 +16,6 @@ test("blocks git internals", () => {
 
 test("blocks env files", () => {
   assert.throws(() => assertSafeRelativePath(".env"), /\.env/i);
+  assert.throws(() => assertSafeRelativePath(".env.local"), /\.env/i);
+  assert.throws(() => assertSafeRelativePath("config/.env.production"), /\.env/i);
 });
