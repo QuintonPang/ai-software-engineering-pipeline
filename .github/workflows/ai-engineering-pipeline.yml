@@ -13,6 +13,22 @@ on:
         default: true
         type: boolean
 
+  workflow_call:
+    inputs:
+      issue_number:
+        description: GitHub issue number to implement
+        required: true
+        type: number
+      dry_run:
+        description: Plan/review only; do not write code or create a PR
+        required: false
+        default: true
+        type: boolean
+    secrets:
+      OPENAI_API_KEY:
+        description: OpenAI API key used by the AI engineering pipeline
+        required: true
+
 permissions:
   contents: write
   issues: read
