@@ -87,7 +87,7 @@ The repository must have a clean working tree before the run.
 Two workflows are included:
 
 - **CI** — runs `npm test` on pull requests and pushes to `main`.
-- **AI Engineering Pipeline** — manually triggered with an issue number and a `dry_run` switch.
+- **AI Engineering Pipeline** — supports both manual execution with `workflow_dispatch` and reuse from another repository with `workflow_call`.
 
 Create an Actions secret:
 
@@ -98,6 +98,52 @@ OPENAI_API_KEY
 The AI workflow automatically receives GitHub's scoped `GITHUB_TOKEN`.
 
 For the first run, keep `dry_run=true` and inspect the generated planning output before enabling implementation.
+
+### Manual run
+
+Open **Actions → AI Engineering Pipeline → Run workflow**, then provide:
+
+- `issue_number` — the GitHub issue containing the requirement
+- `dry_run` — `true` for planning/review only, `false` to implement and create a PR
+
+### Reuse from another repository
+
+Create a small caller workflow in the target repository, for example `.github/workflows/ai-engineer.yml`:
+
+```yaml
+name: AI Engineer
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: GitHub issue number to implement
+        required: true
+        type: number
+      dry_run:
+        description: Plan/review only
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  issues: read
+  pull-requests: write
+
+jobs:
+  ai-engineer:
+    uses: QuintonPang/ai-software-engineering-pipeline/.github/workflows/ai-engineering-pipeline.yml@main
+    with:
+      issue_number: ${{ inputs.issue_number }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+When called this way, the pipeline operates on the **caller repository**. The issue number therefore refers to an issue in that target repository, and `actions/checkout` checks out the caller repository.
+
+The target repository must provide its own `OPENAI_API_KEY` Actions secret. Its workflow also grants the permissions needed for branch creation, issue reading, and pull-request creation.
 
 ## Agent responsibilities
 
